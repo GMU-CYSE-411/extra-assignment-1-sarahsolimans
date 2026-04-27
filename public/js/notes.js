@@ -21,7 +21,10 @@ async function loadNotes(ownerId, search) {
 
   const result = await api(`/api/notes?${query.toString()}`);
   const notesList = document.getElementById("notes-list");
-  notesList.innerHTML = result.notes.map(noteCard).join("");
+  notesList.textContent = "";
+  result.notes.forEach(note => {
+    notesList.appendChild(noteCard(note));
+  });
 }
 
 (async function bootstrapNotes() {

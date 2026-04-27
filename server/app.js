@@ -17,6 +17,8 @@ async function createApp() {
     throw new Error(
       `Database file not found at ${DEFAULT_DB_FILE}. Run "npm run init-db" first.`
     );
+
+    
   }
 
   const db = openDatabase(DEFAULT_DB_FILE);
@@ -70,7 +72,14 @@ async function createApp() {
       response.status(401).json({ error: "Authentication required." });
       return;
     }
+    next();
+  }
 
+  function requireAdmin(request, response, next) {
+    if (request.currentUser.role !== "admin") {
+      response.status(403).json({ error: "Forbidden." });
+      return;
+    }
     next();
   }
 
@@ -88,19 +97,20 @@ async function createApp() {
     const username = String(request.body.username || "");
     const password = String(request.body.password || "");
 
-    const query = `
-      SELECT id, username, role, display_name
+    const user = await db.get(
+      `SELECT id, username, role, display_name
       FROM users
-      WHERE username = '${username}' AND password = '${password}'
-    `;
-    const user = await db.get(query);
+      WHERE username = ? AND password = ?`,
+      [username, password]
+    );
+
 
     if (!user) {
       response.status(401).json({ error: "Invalid username or password." });
       return;
     }
 
-    const sessionId = request.cookies.sid || createSessionId();
+    const sessionId = createSessionId();
 
     await db.run("DELETE FROM sessions WHERE id = ?", [sessionId]);
     await db.run(
@@ -147,16 +157,16 @@ async function createApp() {
         notes.created_at AS createdAt
       FROM notes
       JOIN users ON users.id = notes.owner_id
-      WHERE notes.owner_id = ${ownerId}
-        AND (notes.title LIKE '%${search}%' OR notes.body LIKE '%${search}%')
+      WHERE notes.owner_id = ?
+        AND (notes.title LIKE ? OR notes.body LIKE ?)
       ORDER BY notes.pinned DESC, notes.id DESC
-    `);
+    `, [ownerId, `%${search}%`, `%${search}%`]);
 
     response.json({ notes });
   });
 
   app.post("/api/notes", requireAuth, async (request, response) => {
-    const ownerId = Number(request.body.ownerId || request.currentUser.id);
+    const ownerId = request.currentUser.id;
     const title = String(request.body.title || "");
     const body = String(request.body.body || "");
     const pinned = request.body.pinned ? 1 : 0;
@@ -173,7 +183,7 @@ async function createApp() {
   });
 
   app.get("/api/settings", requireAuth, async (request, response) => {
-    const userId = Number(request.query.userId || request.currentUser.id);
+    const userId = request.currentUser.id;
 
     const settings = await db.get(
       `
@@ -196,7 +206,7 @@ async function createApp() {
   });
 
   app.post("/api/settings", requireAuth, async (request, response) => {
-    const userId = Number(request.body.userId || request.currentUser.id);
+    const userId = request.currentUser.id;
     const displayName = String(request.body.displayName || "");
     const statusMessage = String(request.body.statusMessage || "");
     const theme = String(request.body.theme || "classic");
@@ -211,8 +221,8 @@ async function createApp() {
     response.json({ ok: true });
   });
 
-  app.get("/api/settings/toggle-email", requireAuth, async (request, response) => {
-    const enabled = request.query.enabled === "1" ? 1 : 0;
+  app.post("/api/settings/toggle-email", requireAuth, async (request, response) => {
+    const enabled = request.body.enabled === "1" ? 1 : 0;
 
     await db.run("UPDATE settings SET email_opt_in = ? WHERE user_id = ?", [
       enabled,
@@ -226,7 +236,7 @@ async function createApp() {
     });
   });
 
-  app.get("/api/admin/users", requireAuth, async (_request, response) => {
+  app.get("/api/admin/users", requireAuth, requireAdmin, async (_request, response) => {
     const users = await db.all(`
       SELECT
         users.id,
